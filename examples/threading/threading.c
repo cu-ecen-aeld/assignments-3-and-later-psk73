@@ -82,4 +82,3 @@ bool start_thread_obtaining_mutex(pthread_t *thread, pthread_mutex_t *mutex,int 
 
     return true;
 }
-

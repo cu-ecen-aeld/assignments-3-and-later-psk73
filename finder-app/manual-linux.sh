@@ -141,7 +141,7 @@ buildlinuxstep() {
     #build modules
     buildmodeulesstep() {
       set -x
-      make ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- modules
+      #make ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- modules
       set +x
     }
     buildstep 2 "Build modules" buildmodeulesstep
