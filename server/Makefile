@@ -12,8 +12,8 @@ OBJ = aesdsocket.o
 
 all: aesdsocket
 
-writer: $(OBJ)
-	$(CC) $(CFLAGS) -o aesdsocket $(OBJ)
+aesdsocket: $(OBJ)
+	$(CC) $(CFLAGS) -o aesdsocket $(OBJ) -lrt -lpthread -pthread
 
 %.o: %.c $(DEPS)
 	$(CC) $(CFLAGS) -c -o $@ $<
