@@ -13,6 +13,12 @@
 #include <time.h>
 #include "queue.h"
 
+#define DEBUG_LOG(msg,...)
+#define DEBUG_LOG1 DEBUG_LOG_PR
+#define DEBUG_LOG_PR(msg,...) printf("%s: " msg, __func__, ##__VA_ARGS__)
+
+#define ERROR_LOG(msg,...) printf("threading ERROR: " msg "\n" , ##__VA_ARGS__)
+
 #define LOG_FILE "/var/tmp/aesdsocketdata"
 #define NAME_LEN 50
 #define SERVICE_LEN 50
@@ -62,12 +68,12 @@ static bool g_mutexInitialized = false;
 
 void sigHandlerFunction(int signum) {
     int rc;
-  printf("SigHandler: Caught singal, exiting\n");
+  DEBUG_LOG1("SigHandler: Caught signal %d - %s\n",signum,strsignal(signum));
   // Clean up actions on sigint or sigterm
   if(g_threadCount > 0)
   {
     while (!SLIST_EMPTY(&g_head)) {
-        printf("SigHandler: client thread params being freed\n");
+        DEBUG_LOG1("SigHandler: client thread params being freed\n");
         g_datap = SLIST_FIRST(&g_head);
         if(g_datap->tparms.isThreadDone == true)
         {
@@ -78,58 +84,58 @@ void sigHandlerFunction(int signum) {
                 exit(EXIT_FAILURE);
             }
             g_threadCount--;
-            printf("SigHandler: Thread %lu is done. \n", g_datap->tid);
+            DEBUG_LOG1("SigHandler: Thread %lu is done. \n", g_datap->tid);
         }
         if(g_datap->tparms.readLine != NULL)
         {
-            printf("SigHandler: readline freed\n");
+            DEBUG_LOG1("SigHandler: readline freed\n");
             free(g_datap->tparms.readLine);
         }
         if(g_datap->tparms.logFileWritePtr != NULL)
         {
-            printf("SigHandler: closed logfilewriter\n");
+            DEBUG_LOG1("SigHandler: closed logfilewriter\n");
             fclose(g_datap->tparms.logFileWritePtr);
         }
         if(g_datap->tparms.logFileReadPtr != NULL)
         {
-            printf("SigHandler: closed logfilereader\n");
+            DEBUG_LOG1("SigHandler: closed logfilereader\n");
             fclose(g_datap->tparms.logFileReadPtr);
         }
         if(g_datap->tparms.clientSocketFd != -1)
         {
-            printf("SigHandler: closed clientsocketfd\n");
+            DEBUG_LOG1("SigHandler: closed clientsocketfd\n");
             close(g_datap->tparms.clientSocketFd);
         }
 
-        printf("SigHandler: removed thread from linkedlist\n");
+        DEBUG_LOG1("SigHandler: removed thread from linkedlist\n");
         SLIST_REMOVE_HEAD(&g_head, entries);
-        printf("SigHandler: freed linked list mem for this thread\n");
+        DEBUG_LOG1("SigHandler: freed linked list mem for this thread\n");
         free(g_datap);
     }
   }
-  printf("SigHandler: Deleted the file\n");
+  DEBUG_LOG1("SigHandler: Deleted the file\n");
   unlink(LOG_FILE);
 
   pthread_mutex_destroy(&g_mutex);
 
   if (g_timerCreated)
   {
-      printf("SigHandler: timer deleted\n");
+      DEBUG_LOG1("SigHandler: timer deleted\n");
       timer_delete(g_timerid);
   }
 
   if (g_serverSocketFd)
   {
-    printf("SigHandler: server socket closed\n");
+    DEBUG_LOG1("SigHandler: server socket closed\n");
     close(g_serverSocketFd);
   }
 
   if (g_servInfo)
   {
-    printf("SigHandler: serv info freed\n");
+    DEBUG_LOG1("SigHandler: serv info freed\n");
     freeaddrinfo(g_servInfo);
   }
-  printf("SigHandler: Good Bye!\n\n\n");
+  DEBUG_LOG1("SigHandler: Good Bye!\n\n\n");
   exit(EXIT_FAILURE);
 }
 
@@ -142,7 +148,7 @@ void  timerHandlerFunction(int signum)
     char outstr[100];
     int rc;
 
-    printf("TimerHandler: mutex initialized= %d\n", g_mutexInitialized);
+    DEBUG_LOG("TimerHandler: mutex initialized= %d\n", g_mutexInitialized);
     if(!g_mutexInitialized)
         return;
 
@@ -150,16 +156,16 @@ void  timerHandlerFunction(int signum)
     tmp = localtime(&t);
     if( tmp == NULL)
     {
-        perror("error getting localtime");
+        perror("Error getting localtime");
         exit(EXIT_FAILURE);
     }
     if(strftime(outstr,sizeof(outstr),"%a, %d %b %Y %T %z",tmp) == 0)
     {
-        perror("strftime error");
+        perror("Error strftime error");
         exit(EXIT_FAILURE);
     }
     rc = pthread_mutex_lock(&g_mutex);
-    printf("TimerHandler: obtained mutex lock\n");
+    DEBUG_LOG("TimerHandler: obtained mutex lock\n");
     if(rc == 0)
     {
        // Open Log file , write time stamp and close
@@ -180,11 +186,11 @@ void  timerHandlerFunction(int signum)
            perror("Error mutex unlock");
            exit(EXIT_FAILURE);
       }
-      printf("TimerHandler: released mutex lock\n");
+      DEBUG_LOG("TimerHandler: released mutex lock\n");
     }
     else
     {
-        perror("timer task mutex error");
+        perror("Error timer task mutex error");
         exit(EXIT_FAILURE);
     }
     return;
@@ -203,11 +209,11 @@ void* sendAndReceiveThread(void* thread_param)
     int rcvd = -1;
 
     rc = pthread_mutex_lock(pArgs->mutex);
-    printf("Thread ID %d obtaining mutex lock\n",pArgs->threadId);
+    DEBUG_LOG("Thread ID %d obtaining mutex lock\n",pArgs->threadId);
     if(rc == 0)
     {
         //lock success
-        printf("Thread ID %d  opening the file for write\n", pArgs->threadId);
+        DEBUG_LOG("Thread ID %d  opening the file for write\n", pArgs->threadId);
         {
             //setup
             // Open Log file
@@ -217,7 +223,7 @@ void* sendAndReceiveThread(void* thread_param)
               exit(EXIT_FAILURE);
             }
         }
-        printf("Thread ID %d  starting to receive\n", pArgs->threadId);
+        DEBUG_LOG("Thread ID %d  starting to receive\n", pArgs->threadId);
         {
             // recv
             while ((rcvd = recv(pArgs->clientSocketFd, (void *)buf, sizeof(buf), 0)) > 0) {
@@ -227,25 +233,25 @@ void* sendAndReceiveThread(void* thread_param)
               if (buf[rcvd - 1] == '\n')
                 break;
             }
-            printf("Thread ID %d  closing the file for write\n", pArgs->threadId);
+            DEBUG_LOG("Thread ID %d  closing the file for write\n", pArgs->threadId);
             fclose(pArgs->logFileWritePtr);
             pArgs->logFileWritePtr = NULL;
         }
-        printf("Thread ID %d  sending to client\n", pArgs->threadId);
+        DEBUG_LOG("Thread ID %d  sending to client\n", pArgs->threadId);
         size_t readLineLen = 0;
         ssize_t numread;
         {
             // send
             pArgs->readLine = NULL;
-            printf("Thread ID %d  opening the file for read\n", pArgs->threadId);
+            DEBUG_LOG("Thread ID %d  opening the file for read\n", pArgs->threadId);
             pArgs->logFileReadPtr = fopen(LOG_FILE, "r");
             if (!pArgs->logFileReadPtr) {
               perror("Error opening file for reading");
               exit(EXIT_FAILURE);
             }
             while ((numread = getline(&pArgs->readLine, &readLineLen, pArgs->logFileReadPtr)) != -1) {
-               printf("\tnum read = %d readLineLen = %d\n", (int)numread, (int)readLineLen);
-               /*printf("--->%s<---\n", pArgs->readLine);*/
+               DEBUG_LOG("\tnum read = %d readLineLen = %d\n", (int)numread, (int)readLineLen);
+               /*DEBUG_LOG("--->%s<---\n", pArgs->readLine);*/
               status = send(pArgs->clientSocketFd, pArgs->readLine, numread, 0);
               if (status < 0) {
                 perror("Error sending data to client");
@@ -255,15 +261,15 @@ void* sendAndReceiveThread(void* thread_param)
         }
         {
             //cleanup
-            printf("Thread ID %d  closing the file for read\n", pArgs->threadId);
+            DEBUG_LOG("Thread ID %d  closing the file for read\n", pArgs->threadId);
             fclose(pArgs->logFileReadPtr);
             pArgs->logFileReadPtr = NULL;
             if (pArgs->readLine != NULL) {
-              printf("\tThread ID %d free readline len=%d numread=%d\n",pArgs->threadId,(int)readLineLen,(int)numread);
+              DEBUG_LOG("\tThread ID %d free readline len=%d numread=%d\n",pArgs->threadId,(int)readLineLen,(int)numread);
               free(pArgs->readLine);
             }
             //shutdown socket
-            printf("Thread ID %d  closing the connection to %s\n", pArgs->threadId, pArgs->clientName);
+            DEBUG_LOG("Thread ID %d  closing the connection to %s\n", pArgs->threadId, pArgs->clientName);
             shutdown(pArgs->clientSocketFd, SHUT_RDWR);
             close(pArgs->clientSocketFd);
             pArgs->clientSocketFd = -1;
@@ -273,20 +279,20 @@ void* sendAndReceiveThread(void* thread_param)
             rc = pthread_mutex_unlock(pArgs->mutex);
             if(rc != 0)
             {
-                printf("Thread ID %d Failed to release mutex lock, code %d\n", pArgs->threadId, rc);
+                DEBUG_LOG("Thread ID %d Failed to release mutex lock, code %d\n", pArgs->threadId, rc);
                 perror("Error unlocking mutex");
                 pArgs->isThreadDone = false;
                 exit(EXIT_FAILURE);
             }
             else {
-                printf("Thread ID %d released mutex lock\n",pArgs->threadId);
+                DEBUG_LOG("Thread ID %d released mutex lock\n",pArgs->threadId);
                 pArgs->isThreadDone = true;
             }
         }
     }
     else{
         //lock failure
-        printf("Thread ID %d Failed to obtain mutex lock, code %d\n", pArgs->threadId, rc);
+        DEBUG_LOG("Thread ID %d Failed to obtain mutex lock, code %d\n", pArgs->threadId, rc);
         perror("Error locking mutex");
         pArgs->isThreadDone = false;
         exit(EXIT_FAILURE);
@@ -302,7 +308,7 @@ int main(int argc, char **argv) {
   char clientName[NAME_LEN], clientService[SERVICE_LEN];
   pthread_t tid;
 
-  sleep(2);
+  //sleep(2);
 
   // process args
   /*{*/
@@ -324,6 +330,18 @@ int main(int argc, char **argv) {
 
   // Register signal handler
   /*{*/
+      sigset_t allsigsMask,termAndIntMask;
+      sigemptyset(&allsigsMask);
+      sigemptyset(&termAndIntMask);
+      sigfillset(&allsigsMask);
+      //Block all signals
+      sigprocmask(SIG_BLOCK,&allsigsMask,NULL);
+      sigaddset(&termAndIntMask,SIGTERM);
+      sigaddset(&termAndIntMask,SIGINT);
+      //Unblock SIGTERM AND SIGINT
+      sigprocmask(SIG_UNBLOCK,&termAndIntMask,NULL);
+
+      //register handlers for SIGTERM and SIGINT
       struct sigaction act = {0};
       act.sa_handler = sigHandlerFunction;
       sigemptyset(&act.sa_mask);
@@ -336,10 +354,12 @@ int main(int argc, char **argv) {
         perror("Error registering SIGINT sigaction");
         exit(EXIT_FAILURE);
       }
+      /*
       if (sigaction(SIGPIPE, &act, NULL) == -1) {
         perror("Error registering SIGPIPE sigaction");
         exit(EXIT_FAILURE);
       }
+      */
       struct sigaction timeract = {0};
       timeract.sa_handler = timerHandlerFunction;
       sigemptyset(&timeract.sa_mask);
@@ -358,7 +378,7 @@ int main(int argc, char **argv) {
       g_hints.ai_flags = AI_PASSIVE;
       // get address to local host port 9000.
       if ((rc = getaddrinfo(NULL, "9000", &g_hints, &g_servInfo)) != 0) {
-        perror("Error with getaddro ");
+        perror("Error with getaddrinfo ");
         exit(EXIT_FAILURE);
       }
       // create socket and bind to it.
@@ -372,7 +392,7 @@ int main(int argc, char **argv) {
       const int enable = 1;
       if (setsockopt(g_serverSocketFd, SOL_SOCKET, SO_REUSEADDR, &enable,
                      sizeof(int)) < 0) {
-        perror("setsockopt(SO_REUSEADDR) failed");
+        perror("Error setsockopt(SO_REUSEADDR) failed");
         exit(EXIT_FAILURE);
       }
       // Techinically we need loop thorugh the linked list, but we expect only one
@@ -437,7 +457,7 @@ int main(int argc, char **argv) {
           exit(EXIT_FAILURE);
       }
       g_mutexInitialized  = true;
-      printf("Main: Mutex intialized now\n");
+      DEBUG_LOG("Main: Mutex intialized now\n");
   /*}*/
 
   //Setup Timer
@@ -455,7 +475,7 @@ int main(int argc, char **argv) {
           perror("Error timer create");
           exit(EXIT_FAILURE);
       }
-      printf("Main: Timer created successfully\n");
+      DEBUG_LOG("Main: Timer created successfully\n");
       g_timerCreated = true;
       //start the timer
       its.it_value.tv_sec = 1;
@@ -472,7 +492,7 @@ int main(int argc, char **argv) {
   // accept connections and start threads.
   for (;;) {
     // accept connections
-      printf("Main: Waiting to accept next connection\n");
+      DEBUG_LOG("Main: Waiting to accept next connection\n");
     /*{*/
         clientAddrLen = sizeof(clientAddress);
         g_clientSocketFd = accept(g_serverSocketFd, &clientAddress, &clientAddrLen);
@@ -489,7 +509,7 @@ int main(int argc, char **argv) {
           perror("Error getting client address name");
           exit(EXIT_FAILURE);
         }
-        printf("Accepted connection from %s - service %s\n", clientName, clientService);
+        DEBUG_LOG("Accepted connection from %s - service %s\n", clientName, clientService);
     /*}*/
     //populate param info for thread
     /*{*/
@@ -505,12 +525,12 @@ int main(int argc, char **argv) {
     /*}*/
     //create thread for processing
     /*{*/
-        printf("Creating thread for %s\n",clientName);
+        DEBUG_LOG("Creating thread for %s\n",clientName);
         /*Create the thread*/
         rc = pthread_create(&tid,NULL,sendAndReceiveThread,(void *)(&g_datap->tparms));
         if(rc != 0)
         {
-            perror("Failed to create thread, error code");
+            perror("Error Failed to create thread, error code");
             exit(EXIT_FAILURE);
         }
         g_datap->tid = tid;
@@ -518,7 +538,7 @@ int main(int argc, char **argv) {
     /*}*/
     //save thread to linked list
     /*{*/
-        printf("Main: Insert thread ID: %d in linkedlist\n", g_datap->tparms.threadId);
+        DEBUG_LOG("Main: Insert thread ID: %d in linkedlist\n", g_datap->tparms.threadId);
         SLIST_INSERT_HEAD(&g_head, g_datap, entries);
     /*}*/
     // Find threads that are done and join.
@@ -533,7 +553,7 @@ int main(int argc, char **argv) {
                 exit(EXIT_FAILURE);
             }
             SLIST_REMOVE_HEAD(&g_head, entries);
-            printf("Main: Thread %d is done. Removed from linked list\n", g_datap->tparms.threadId);
+            DEBUG_LOG("Main: Thread %d is done. Removed from linked list\n", g_datap->tparms.threadId);
             free(g_datap);
             g_threadCount--;
         }
