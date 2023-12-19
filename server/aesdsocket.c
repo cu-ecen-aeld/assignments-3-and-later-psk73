@@ -21,8 +21,8 @@
 #define BUF_SIZE 1024
 #define TIMERSIG SIGUSR1
 
-#define ERROR_LOG(msg, ...)                                                    \
-  printf("ERROR %d:%s: " msg "\n", errno, strerror(errno), ##__VA_ARGS__)
+#define ERROR_LOG(msg, errnum, ...)                                            \
+  printf("ERROR %d:%s: " msg "\n", errnum, strerror(errnum), ##__VA_ARGS__)
 #if 0
 //enable debug prints
 #define PRINT_LOG(msg, ...) printf("%s: " msg, __func__, ##__VA_ARGS__)
@@ -31,15 +31,17 @@
 #define PRINT_LOG(msg, ...)
 #endif
 
-#define checkerr(errcond, msg)                                                 \
+#define checkerr(errcond, msg, ...)                                            \
+  g_errno = errno;                                                             \
   if ((errcond) == true) {                                                     \
-    ERROR_LOG((msg));                                                          \
+    ERROR_LOG(msg, g_errno, ##__VA_ARGS__);                                    \
     exit(EXIT_FAILURE);                                                        \
   }
 
-int g_logFileFd = -1;
-int g_serverSocketFd = -1;
-int g_clientSocketFd = -1;
+static int g_errno = 0;
+static int g_logFileFd = -1;
+static int g_serverSocketFd = -1;
+static int g_clientSocketFd = -1;
 struct addrinfo g_hints;
 struct addrinfo *g_servInfo = NULL;
 static bool g_runAsDaemon = false;
@@ -47,7 +49,7 @@ static timer_t g_timerid;
 static bool g_timerCreated = false;
 static int g_threadCount = 0;
 static int g_threadId = 0;
-pthread_mutex_t g_mutex;
+static pthread_mutex_t g_mutex;
 static bool g_mutexInitialized = false;
 
 struct thread_data {
@@ -81,10 +83,7 @@ void sigHandlerFunction(int signum) {
       g_datap = SLIST_FIRST(&g_head);
       if (g_datap->tparms.clientSocketFd >= 0) {
         rc = pthread_join(g_datap->tid, NULL);
-        if (rc < 0) {
-          ERROR_LOG("Error joinining thread");
-          exit(EXIT_FAILURE);
-        }
+        checkerr(rc < 0, " joining thread");
         g_threadCount--;
         PRINT_LOG("SigHandler: Thread %lu is done. \n", g_datap->tid);
       }
@@ -135,33 +134,32 @@ static void timerHandlerFunction(int signum) {
 
   t = time(NULL);
   tmp = localtime(&t);
-  if (tmp == NULL) {
-    ERROR_LOG("Error getting localtime");
-    exit(EXIT_FAILURE);
-  }
-  if (strftime(outstr, sizeof(outstr), "%a, %d %b %Y %T %z", tmp) == 0) {
-    ERROR_LOG("Error strftime error");
-    exit(EXIT_FAILURE);
-  }
+  checkerr(tmp == NULL, " getting localtime");
+  rc = strftime(outstr, sizeof(outstr), "%a, %d %b %Y %T %z", tmp);
+  checkerr(rc == 0, " strftime error");
 
   PRINT_LOG("TimerHandler: obtained mutex lock\n");
   rc = pthread_mutex_lock(&g_mutex);
-  if (rc != 0) {
-    ERROR_LOG("Error timer task mutex error");
-    exit(EXIT_FAILURE);
-  }
+  checkerr(rc != 0, " getting timer mutex lock");
+
   // seek to end of the Log file , write time stamp and close
-  lseek(g_logFileFd, 0, SEEK_END);
-  write(g_logFileFd, prefix, strlen(prefix));
-  write(g_logFileFd, outstr, strlen(outstr));
-  write(g_logFileFd, postfix, strlen(postfix));
+  rc = lseek(g_logFileFd, 0, SEEK_END);
+  checkerr(rc == 0, " seeking to end of file");
+
+  rc = write(g_logFileFd, prefix, strlen(prefix));
+  checkerr(rc == 0, " writing to file");
+
+  rc = write(g_logFileFd, outstr, strlen(outstr));
+  checkerr(rc == 0, " writing to file");
+
+  // rc = write(g_logFileFd, postfix, strlen(postfix));
+  rc = write(g_logFileFd, postfix, strlen(postfix));
+  checkerr(rc == 0, " writing to file");
+
   PRINT_LOG("TimerHandler: wrote time stamp to file\n");
 
   rc = pthread_mutex_unlock(&g_mutex);
-  if (rc != 0) {
-    ERROR_LOG("Error mutex unlock");
-    exit(EXIT_FAILURE);
-  }
+  checkerr(rc != 0, " mutext unlock");
   PRINT_LOG("TimerHandler: released mutex lock\n");
   return;
 }
@@ -178,12 +176,7 @@ void *sendAndReceiveThread(void *thread_param) {
 
   PRINT_LOG("Thread ID %d obtaining mutex lock\n", pArgs->threadId);
   rc = pthread_mutex_lock(pArgs->mutex);
-  if (rc != 0) {
-    // lock failure
-    ERROR_LOG("Thread ID %d Failed to obtain mutex lock, code %d\n",
-              pArgs->threadId, rc);
-    exit(EXIT_FAILURE);
-  }
+  checkerr(rc != 0, " locking mutex threadId=%d, code=%d", pArgs->threadId, rc);
   // lock success
   // setup
   PRINT_LOG("Thread ID %d  set file location to end for writing \n",
@@ -196,10 +189,7 @@ void *sendAndReceiveThread(void *thread_param) {
          0) {
     PRINT_LOG("\tnum rcvd = %d \n", (int)rcvd);
     rc = write(pArgs->logFileFd, buf, rcvd);
-    if (rc != rcvd) {
-      ERROR_LOG("ERROR writing to file fd=%d rc=%d\n", pArgs->logFileFd, rc);
-      exit(EXIT_FAILURE);
-    }
+    checkerr(rc != rcvd, " writing to file");
     // finished with recieving if end of packet
     if (buf[rcvd - 1] == '\n')
       break;
@@ -223,19 +213,12 @@ void *sendAndReceiveThread(void *thread_param) {
     PRINT_LOG("--\n")
     */
     rc = send(pArgs->clientSocketFd, readBuf, readLen, 0);
-    if (rc < 0) {
-      ERROR_LOG("Error sending data to client");
-      exit(EXIT_FAILURE);
-    }
+    checkerr(rc < 0, " sending data to client");
   }
   // cleanup
   // Unlock
   rc = pthread_mutex_unlock(pArgs->mutex);
-  if (rc != 0) {
-    ERROR_LOG("Thread ID %d Failed to release mutex lock, code %d\n",
-              pArgs->threadId, rc);
-    exit(EXIT_FAILURE);
-  }
+  checkerr(rc != 0, " unlocking mutex");
   PRINT_LOG("Thread ID %d released mutex lock\n", pArgs->threadId);
   // shutdown socket
   PRINT_LOG("Thread ID %d  closing the connection to %s\n", pArgs->threadId,
@@ -276,10 +259,8 @@ int main(int argc, char **argv) {
     // fork
     int pid;
     pid = fork();
-    if (pid == -1) {
-      ERROR_LOG("Error forking the process");
-      exit(EXIT_FAILURE);
-    }
+    checkerr(pid == -1, "Error forking the process");
+
     // kill the parent
     if (pid > 0) {
       PRINT_LOG("Parent exiting as running in daemon mode!\n");
@@ -300,14 +281,11 @@ int main(int argc, char **argv) {
   act.sa_handler = sigHandlerFunction;
   sigemptyset(&act.sa_mask);
   act.sa_flags = 0;
-  if (sigaction(SIGTERM, &act, NULL) == -1) {
-    ERROR_LOG("Error registering SIGTERM sigaction");
-    exit(EXIT_FAILURE);
-  }
-  if (sigaction(SIGINT, &act, NULL) == -1) {
-    ERROR_LOG("Error registering SIGINT sigaction");
-    exit(EXIT_FAILURE);
-  }
+  checkerr(sigaction(SIGTERM, &act, NULL) == -1,
+           "Error registering SIGTERM sigaction");
+
+  checkerr(sigaction(SIGINT, &act, NULL) == -1,
+           "Error registering SIGINT sigaction");
 
   // register timer thread for SIGUSR1
   PRINT_LOG("Main: Registering handlers for SIGUSR1\n");
@@ -315,10 +293,8 @@ int main(int argc, char **argv) {
   timeract.sa_handler = timerHandlerFunction;
   sigemptyset(&timeract.sa_mask);
   timeract.sa_flags = SA_SIGINFO;
-  if (sigaction(TIMERSIG, &timeract, NULL) == -1) {
-    ERROR_LOG("Error registering timer sigaction");
-    exit(EXIT_FAILURE);
-  }
+  checkerr(sigaction(TIMERSIG, &timeract, NULL) == -1,
+           "Error registering timer sigaction");
 
   // Setup socket
   memset(&g_hints, 0, sizeof(g_hints));
@@ -326,33 +302,26 @@ int main(int argc, char **argv) {
   g_hints.ai_socktype = SOCK_STREAM;
   g_hints.ai_flags = AI_PASSIVE;
   // get address to local host port 9000.
-  if ((rc = getaddrinfo(NULL, "9000", &g_hints, &g_servInfo)) != 0) {
-    ERROR_LOG("Error with getaddrinfo ");
-    exit(EXIT_FAILURE);
-  }
+  checkerr((rc = getaddrinfo(NULL, "9000", &g_hints, &g_servInfo)) != 0,
+           "Error with getaddrinfo ");
 
   // create socket and bind to it.
   g_serverSocketFd = socket(g_servInfo->ai_family, g_servInfo->ai_socktype,
                             g_servInfo->ai_protocol);
-  if (g_serverSocketFd < 0) {
-    ERROR_LOG("Error creating socket");
-    exit(EXIT_FAILURE);
-  }
+  checkerr(g_serverSocketFd < 0, " creating socket");
+  checkerr(g_serverSocketFd < 0, "Error creating socket");
 
   // setup socket reuse option
   const int enable = 1;
-  if (setsockopt(g_serverSocketFd, SOL_SOCKET, SO_REUSEADDR, &enable,
-                 sizeof(int)) < 0) {
-    ERROR_LOG("Error setsockopt(SO_REUSEADDR) failed");
-    exit(EXIT_FAILURE);
-  }
+  checkerr(setsockopt(g_serverSocketFd, SOL_SOCKET, SO_REUSEADDR, &enable,
+                      sizeof(int)) < 0,
+           "Error setsockopt(SO_REUSEADDR) failed");
+
   // Techinically we need loop thorugh the linked list, but we expect only one
   // address so using ony once here to bind to socket
-  if (bind(g_serverSocketFd, g_servInfo->ai_addr, g_servInfo->ai_addrlen) !=
-      0) {
-    ERROR_LOG("Error binding to socket");
-    exit(EXIT_FAILURE);
-  }
+  checkerr(
+      bind(g_serverSocketFd, g_servInfo->ai_addr, g_servInfo->ai_addrlen) != 0,
+      "Error binding to socket");
 
   if (g_servInfo) {
     freeaddrinfo(g_servInfo);
@@ -360,59 +329,50 @@ int main(int argc, char **argv) {
   }
 
   // listen
-  if (listen(g_serverSocketFd, 1)) {
-    ERROR_LOG("Error listening to socket");
-    exit(EXIT_FAILURE);
-  }
+  checkerr(listen(g_serverSocketFd, 1), "Error listening to socket");
 
   // Setup for thread usage
 
   // open file for use by threads
   unlink(LOG_FILE);
   g_logFileFd = open(LOG_FILE, O_CREAT | O_APPEND | O_SYNC | O_RDWR, 0644);
-  if (g_logFileFd < 0) {
-    ERROR_LOG("Error opening the file \n");
-    exit(EXIT_FAILURE);
-  }
+  checkerr(g_logFileFd < 0, "Error opening the file \n");
   PRINT_LOG("Main: File opened now fd=%d\n", g_logFileFd);
+
   // create linked list for receiver threads
   SLIST_INIT(&g_head);
   g_threadCount = 0;
   g_threadId = 0;
   PRINT_LOG("Main: Linkedlist for threads initialized\n");
+
   // Initialize mutex for use by threads.
   rc = pthread_mutex_init(&g_mutex, NULL);
-  if (rc != 0) {
-    ERROR_LOG("Error obtaining mutex");
-    exit(EXIT_FAILURE);
-  }
+  checkerr(rc != 0, "Error obtaining mutex");
   g_mutexInitialized = true;
   PRINT_LOG("Main: Mutex intialized now\n");
 
   // Setup Timer
   struct sigevent sev;
   struct itimerspec its;
+
   // create the timer
   sev.sigev_notify = SIGEV_THREAD;
   sev.sigev_notify_function = &timerHandlerThreadFunction;
   sev.sigev_notify_attributes = 0;
   /*sev.sigev_signo = TIMERSIG;*/
   sev.sigev_value.sival_ptr = &g_timerid;
-  if (timer_create(CLOCK_REALTIME, &sev, &g_timerid) == -1) {
-    ERROR_LOG("Error timer create");
-    exit(EXIT_FAILURE);
-  }
+  checkerr(timer_create(CLOCK_REALTIME, &sev, &g_timerid) == -1,
+           "Error timer create");
   g_timerCreated = true;
   PRINT_LOG("Main: Timer created successfully\n");
+
   // start the timer
   its.it_value.tv_sec = 1;
   its.it_value.tv_nsec = 0;
   its.it_interval.tv_sec = 10;
   its.it_interval.tv_nsec = 0;
-  if (timer_settime(g_timerid, 0, &its, NULL) == -1) {
-    ERROR_LOG("Error starting the timer");
-    exit(EXIT_FAILURE);
-  }
+  checkerr(timer_settime(g_timerid, 0, &its, NULL) == -1,
+           "Error starting the timer");
   PRINT_LOG("Main: Timer started now\n");
 
   // accept connections and start threads.
@@ -421,20 +381,15 @@ int main(int argc, char **argv) {
     PRINT_LOG("Main: Waiting to accept next connection\n");
     clientAddrLen = sizeof(clientAddress);
     g_clientSocketFd = accept(g_serverSocketFd, &clientAddress, &clientAddrLen);
-    if (g_clientSocketFd < 0) {
-      ERROR_LOG("Error accepting the client socket");
-      exit(EXIT_FAILURE);
-    }
+    checkerr(g_clientSocketFd < 0, " accepting the client socket");
     // get connected client name
     rc = getnameinfo(&clientAddress, clientAddrLen, clientName, NAME_LEN,
                      clientService, SERVICE_LEN,
                      NI_NUMERICHOST | NI_NUMERICSERV);
-    if (rc != 0) {
-      ERROR_LOG("Error getting client address name");
-      exit(EXIT_FAILURE);
-    }
+    checkerr(rc != 0, "Error getting client address name");
     PRINT_LOG("Accepted connection from %s - service %s\n", clientName,
               clientService);
+
     // populate param info for thread
     g_datap = malloc(sizeof(slist_data_t));
     g_datap->tparms.mutex = &g_mutex;
@@ -442,17 +397,15 @@ int main(int argc, char **argv) {
     g_datap->tparms.clientSocketFd = g_clientSocketFd;
     strcpy(g_datap->tparms.clientName, clientName);
     g_datap->tparms.threadId = ++g_threadId;
+
     // create thread for processing
     PRINT_LOG("Main: Creating thread for %s\n", clientName);
-    /*Create the thread*/
     rc = pthread_create(&tid, NULL, sendAndReceiveThread,
                         (void *)(&g_datap->tparms));
-    if (rc != 0) {
-      ERROR_LOG("Error Failed to create thread, error code");
-      exit(EXIT_FAILURE);
-    }
+    checkerr(rc != 0, "Error Failed to create thread, error code");
     g_datap->tid = tid;
     g_threadCount++;
+
     // save thread to linked list
     PRINT_LOG("Main: Insert thread ID: %d in linkedlist\n",
               g_datap->tparms.threadId);
@@ -463,10 +416,7 @@ int main(int argc, char **argv) {
       g_datap = SLIST_FIRST(&g_head);
       if (g_datap->tparms.clientSocketFd >= 0) {
         rc = pthread_join(g_datap->tid, NULL);
-        if (rc < 0) {
-          ERROR_LOG("Error joinining thread");
-          exit(EXIT_FAILURE);
-        }
+        checkerr(rc < 0, " pthread join");
         SLIST_REMOVE_HEAD(&g_head, entries);
         PRINT_LOG("Main: Thread %d is done. Removed from linked list\n",
                   g_datap->tparms.threadId);
