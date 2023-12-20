@@ -1,7 +1,7 @@
 ifeq ($(CROSS_COMPILE),aarch64-none-linux-gnu-)
-	CC = $(CROSS_COMPILE)gcc
+	CC ?=$(CROSS_COMPILE)gcc
 else
-	CC =gcc
+	CC ?=gcc
 endif
 
 CFLAGS = -Wall -g
