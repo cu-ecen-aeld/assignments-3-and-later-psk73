@@ -83,7 +83,7 @@ void sigHandlerFunction(int signum) {
       g_datap = SLIST_FIRST(&g_head);
       if (g_datap->tparms.clientSocketFd >= 0) {
         rc = pthread_join(g_datap->tid, NULL);
-        checkerr(rc < 0, " joining thread");
+        checkerr(rc != 0, " joining thread");
         g_threadCount--;
         PRINT_LOG("SigHandler: Thread %lu is done. \n", g_datap->tid);
       }
@@ -135,6 +135,7 @@ static void timerHandlerFunction(int signum) {
   t = time(NULL);
   tmp = localtime(&t);
   checkerr(tmp == NULL, " getting localtime");
+
   rc = strftime(outstr, sizeof(outstr), "%a, %d %b %Y %T %z", tmp);
   checkerr(rc == 0, " strftime error");
 
@@ -144,17 +145,17 @@ static void timerHandlerFunction(int signum) {
 
   // seek to end of the Log file , write time stamp and close
   rc = lseek(g_logFileFd, 0, SEEK_END);
-  checkerr(rc == 0, " seeking to end of file");
+  checkerr(rc == -1, " seeking to end of file");
 
   rc = write(g_logFileFd, prefix, strlen(prefix));
-  checkerr(rc == 0, " writing to file");
+  checkerr(rc == -1, " writing to file");
 
   rc = write(g_logFileFd, outstr, strlen(outstr));
-  checkerr(rc == 0, " writing to file");
+  checkerr(rc == -1, " writing to file");
 
   // rc = write(g_logFileFd, postfix, strlen(postfix));
   rc = write(g_logFileFd, postfix, strlen(postfix));
-  checkerr(rc == 0, " writing to file");
+  checkerr(rc == -1, " writing to file");
 
   PRINT_LOG("TimerHandler: wrote time stamp to file\n");
 
@@ -308,13 +309,12 @@ int main(int argc, char **argv) {
   // create socket and bind to it.
   g_serverSocketFd = socket(g_servInfo->ai_family, g_servInfo->ai_socktype,
                             g_servInfo->ai_protocol);
-  checkerr(g_serverSocketFd < 0, " creating socket");
   checkerr(g_serverSocketFd < 0, "Error creating socket");
 
   // setup socket reuse option
   const int enable = 1;
   checkerr(setsockopt(g_serverSocketFd, SOL_SOCKET, SO_REUSEADDR, &enable,
-                      sizeof(int)) < 0,
+                      sizeof(int)) !=  0,
            "Error setsockopt(SO_REUSEADDR) failed");
 
   // Techinically we need loop thorugh the linked list, but we expect only one
@@ -329,7 +329,7 @@ int main(int argc, char **argv) {
   }
 
   // listen
-  checkerr(listen(g_serverSocketFd, 1), "Error listening to socket");
+  checkerr(listen(g_serverSocketFd, 1)!=0, "Error listening to socket");
 
   // Setup for thread usage
 
@@ -361,7 +361,7 @@ int main(int argc, char **argv) {
   sev.sigev_notify_attributes = 0;
   /*sev.sigev_signo = TIMERSIG;*/
   sev.sigev_value.sival_ptr = &g_timerid;
-  checkerr(timer_create(CLOCK_REALTIME, &sev, &g_timerid) == -1,
+  checkerr(timer_create(CLOCK_REALTIME, &sev, &g_timerid) != 0,
            "Error timer create");
   g_timerCreated = true;
   PRINT_LOG("Main: Timer created successfully\n");
@@ -371,7 +371,7 @@ int main(int argc, char **argv) {
   its.it_value.tv_nsec = 0;
   its.it_interval.tv_sec = 10;
   its.it_interval.tv_nsec = 0;
-  checkerr(timer_settime(g_timerid, 0, &its, NULL) == -1,
+  checkerr(timer_settime(g_timerid, 0, &its, NULL) != 0,
            "Error starting the timer");
   PRINT_LOG("Main: Timer started now\n");
 
@@ -416,7 +416,7 @@ int main(int argc, char **argv) {
       g_datap = SLIST_FIRST(&g_head);
       if (g_datap->tparms.clientSocketFd >= 0) {
         rc = pthread_join(g_datap->tid, NULL);
-        checkerr(rc < 0, " pthread join");
+        checkerr(rc != 0, " pthread join");
         SLIST_REMOVE_HEAD(&g_head, entries);
         PRINT_LOG("Main: Thread %d is done. Removed from linked list\n",
                   g_datap->tparms.threadId);
