@@ -3,6 +3,7 @@ ifeq ($(CROSS_COMPILE),aarch64-none-linux-gnu-)
 else
 	CC ?=gcc
 endif
+LDFLAGS ?= -lpthread -lrt
 
 CFLAGS = -Wall -g
 
@@ -13,7 +14,7 @@ OBJ = aesdsocket.o
 all: aesdsocket
 
 aesdsocket: $(OBJ)
-	$(CC) $(CFLAGS) -o aesdsocket $(OBJ) -lrt -lpthread -pthread
+	$(CC) $(CFLAGS) -o aesdsocket $(OBJ) $(LDFLAGS)
 
 %.o: %.c $(DEPS)
 	$(CC) $(CFLAGS) -c -o $@ $<
