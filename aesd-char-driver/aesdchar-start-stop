@@ -6,6 +6,8 @@ case "$1" in
     echo "Loading assignment8 modules.."
     echo "module load for aesdchar"
     /bin/sh ./aesdchar_load
+    echo "aesd device created is..."
+    ls -al /dev/aesdchar
     ;;
     stop)
     echo "Unloading assignment8 modules.."
