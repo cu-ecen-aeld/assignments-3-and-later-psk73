@@ -30,7 +30,6 @@ struct aesd_dev {
    * DONE: Add structure(s) and locks needed to complete assignment requirements
    */
   struct aesd_circular_buffer aesd_dev_buffer;
-  uint8_t numEntriesInBuffer;
   size_t readOffset;
   size_t writeOffset;
   struct aesd_buffer_entry aesd_working_entry;

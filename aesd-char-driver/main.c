@@ -12,6 +12,7 @@
  */
 
 #include "aesdchar.h"
+#include <asm/uaccess.h>
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
 #include <linux/init.h>
@@ -31,8 +32,6 @@ int aesd_open(struct inode *inode, struct file *filp) {
   struct aesd_dev *adevicePtr;
   PDEBUG("open");
   adevicePtr = container_of(inode->i_cdev, struct aesd_dev, cdev);
-  adevicePtr->aesd_working_entry.size = 0;
-  adevicePtr->aesd_working_entry.buffptr = NULL;
   filp->private_data = adevicePtr;
   PDEBUG("open done");
   return 0;
@@ -61,6 +60,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
   mutex_lock(&devp->aesd_dev_buf_lock);
   PDEBUG("Read: obtained read mutex");
 
+#if 0
   if (devp->numEntriesInBuffer <= 0) {
     PDEBUG("Read: Buffer empty, return 0");
     devp->numEntriesInBuffer = 0;
@@ -69,10 +69,14 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     retval = 0;
     goto ret_done;
   }
+#endif
+
   readEntryPtr = aesd_circular_buffer_find_entry_offset_for_fpos(
       &devp->aesd_dev_buffer, (size_t)(devp->readOffset), &offWithinEntry);
   if (readEntryPtr == NULL) {
     PDEBUG("Read: not able to read from circular buffer returning 0");
+    devp->readOffset = 0;
+    devp->writeOffset = 0;
     retval = 0;
     goto ret_done;
   } else {
@@ -86,13 +90,10 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
       goto ret_done;
     }
     PDEBUG("Read: Copy to user done");
-    devp->numEntriesInBuffer -= 1;
     devp->readOffset += retsize;
     filp->f_pos = devp->readOffset;
     PDEBUG("Read: updated fpos to %ld", devp->readOffset);
     retval = retsize;
-    kfree(readEntryPtr->buffptr);
-    PDEBUG("Read: num valid entries in buffer %d", devp->numEntriesInBuffer);
   }
 ret_done:
   PDEBUG("Read: mutex unlocking");
@@ -114,14 +115,15 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
   PDEBUG("Write: mutex locking.");
   mutex_lock(&devp->aesd_dev_buf_lock);
   PDEBUG("Write: obtained write mutex ");
+  PDEBUG("Write: working entry buffer=%s",devp->aesd_working_entry.buffptr);
+  PDEBUG("Write: working entry size=%ld",devp->aesd_working_entry.size);
 
   memSzReqd = devp->aesd_working_entry.size + count;
   PDEBUG("Write: allocating %ld bytes of kernel memory", memSzReqd);
   devp->aesd_working_entry.buffptr =
       krealloc(devp->aesd_working_entry.buffptr, memSzReqd, GFP_KERNEL);
   if (devp->aesd_working_entry.buffptr == NULL) {
-    PDEBUG("Write: error allocating memory for buffer size %ld",
-           memSzReqd);
+    PDEBUG("Write: error allocating memory for buffer size %ld", memSzReqd);
     goto ret_done;
   }
   PDEBUG("Write: mem allocation succesful");
@@ -129,6 +131,10 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
   // append user data to current buffer, starting from where we left off last
   // time
   to = devp->aesd_working_entry.buffptr + devp->aesd_working_entry.size;
+  memset((void *)to, 0, count);
+  PDEBUG("Write: after memset to is <<%s>>", to);
+  PDEBUG("Write: after buffptr is <<%s>>", devp->aesd_working_entry.buffptr);
+
   memSzNotCopiedFromUser = copy_from_user((void *)to, buf, count);
   if (memSzNotCopiedFromUser != 0) {
     // Only partially copied. Since ret were not copied,
@@ -138,16 +144,20 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     // successfully copied all count bytes from user
     retval = count;
   }
-  PDEBUG("Write: num not copied from user is %ld, asked is %ld, retval is %ld",
-         memSzNotCopiedFromUser, count, retval);
-  PDEBUG("Write: user msg is %s", to);
-
   totalBufSize = devp->aesd_working_entry.size + retval;
   devp->aesd_working_entry.size = totalBufSize;
+
+  PDEBUG("Write: num not copied from user is %ld, asked is %ld, retval is %ld",
+         memSzNotCopiedFromUser, count, retval);
+  PDEBUG("Write: cumulative user msg is <<%s>>",
+         devp->aesd_working_entry.buffptr);
   if (devp->aesd_working_entry.buffptr[totalBufSize - 1] == '\n') {
     // received new line, so move working contents to the
     // circular buffer
     struct aesd_buffer_entry *retPtr;
+    PDEBUG("Write: full message received,adding to circular buffer "
+           "totalbufsize=%ld",
+           totalBufSize);
     retPtr = aesd_circular_buffer_add_entry(&devp->aesd_dev_buffer,
                                             &devp->aesd_working_entry);
     if (retPtr != NULL) {
@@ -156,13 +166,11 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
       devp->writeOffset -= retPtr->size;
       // devp->readOffset -= retPtr->size;
       kfree(retPtr->buffptr);
+      retPtr->buffptr = NULL;
     }
     // reset working entry as we stored this in circular buffer now
     devp->aesd_working_entry.size = 0;
     devp->aesd_working_entry.buffptr = NULL;
-    devp->numEntriesInBuffer += 1;
-    PDEBUG("Write: successfully added to circular buffer. Valid entries=%d",
-           devp->numEntriesInBuffer);
   }
   // else {
   // Not adding to circular buffer as no new line, stored only in the working
@@ -204,6 +212,7 @@ int aesd_init_module(void) {
   dev_t dev = 0;
   int result;
 
+  PDEBUG("Init");
   result = alloc_chrdev_region(&dev, aesd_minor, 1, "aesdchar");
   if (result < 0) {
     printk(KERN_WARNING "Can't get major %d\n", aesd_major);
@@ -213,6 +222,8 @@ int aesd_init_module(void) {
 
   memset(&aesd_device, 0, sizeof(struct aesd_dev));
   aesd_circular_buffer_init(&aesd_device.aesd_dev_buffer);
+  aesd_device.aesd_working_entry.size = 0;
+  aesd_device.aesd_working_entry.buffptr = NULL;
   mutex_init(&aesd_device.aesd_dev_buf_lock);
 
   result = aesd_setup_cdev(&aesd_device);
@@ -225,9 +236,14 @@ int aesd_init_module(void) {
 
 void aesd_cleanup_module(void) {
   dev_t devno = MKDEV(aesd_major, aesd_minor);
-  unregister_chrdev_region(devno, 1);
+  PDEBUG("Cleanup");
   cdev_del(&aesd_device.cdev);
   mutex_destroy(&aesd_device.aesd_dev_buf_lock);
+  aesd_circular_buffer_destroy(&aesd_device.aesd_dev_buffer);
+  if (aesd_device.aesd_working_entry.buffptr) {
+    kfree(aesd_device.aesd_working_entry.buffptr);
+  }
+  unregister_chrdev_region(devno, 1);
 }
 
 module_init(aesd_init_module);

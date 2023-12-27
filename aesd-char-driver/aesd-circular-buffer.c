@@ -87,6 +87,7 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(
       // calculate off set to return;
       *entry_offset_byte_rtn = char_offset - prevRunningOffset;
       PRINT("\t found returning offset %d\n", (int)(*entry_offset_byte_rtn));
+      PRINT("\t returning buf %s \n\treturning size %ld",entryptr->buffptr,entryptr->size);
       return entryptr;
     }
     index = (index + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
@@ -111,14 +112,23 @@ aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer,
   struct aesd_buffer_entry *retPtr = NULL;
   PRINT("Before: in = %d out = %d full=%d\n", buffer->in_offs, buffer->out_offs,
         buffer->full);
+  PRINT("   current in buf[%d]=%s size=%ld\n", buffer->in_offs,
+        buffer->entry[buffer->in_offs].buffptr,
+        buffer->entry[buffer->in_offs].size);
+  PRINT("   adding buf=%s size=%ld", add_entry->buffptr, add_entry->size);
 
-  //Save copy of current in , incase there is an overflow
-  buffer->overflow_entry = buffer->entry[buffer->in_offs];
+  // Save copy of current in , incase there is an overflow
+  buffer->overflow_entry.buffptr = buffer->entry[buffer->in_offs].buffptr;
+  buffer->overflow_entry.size = buffer->entry[buffer->in_offs].size;
+
   // copy new entry to circular buffer and
   // update offsets
-  buffer->entry[buffer->in_offs] = *add_entry;
-  PRINT("buf[%d] == %s\n", buffer->in_offs,
-        buffer->entry[buffer->in_offs].buffptr);
+  buffer->entry[buffer->in_offs].buffptr = add_entry->buffptr;
+  buffer->entry[buffer->in_offs].size = add_entry->size;
+
+  PRINT("new buf[%d]=%s size=%ld\n", buffer->in_offs,
+        buffer->entry[buffer->in_offs].buffptr,
+        buffer->entry[buffer->in_offs].size);
 
   buffer->in_offs =
       (buffer->in_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
@@ -147,4 +157,16 @@ aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer,
  */
 void aesd_circular_buffer_init(struct aesd_circular_buffer *buffer) {
   memset(buffer, 0, sizeof(struct aesd_circular_buffer));
+}
+
+/**
+ * Initializes the circular buffer described by @param buffer to an empty struct
+ */
+void aesd_circular_buffer_destroy(struct aesd_circular_buffer *buffer) {
+  uint8_t index;
+  struct aesd_buffer_entry *entry;
+  AESD_CIRCULAR_BUFFER_FOREACH(entry, buffer, index) {
+    if (entry->buffptr)
+      kfree(entry->buffptr);
+  }
 }
