@@ -108,10 +108,13 @@ void sigHandlerFunction(int signum) {
       free(g_datap);
     }
   }
+
+#ifndef USE_AESD_CHAR_DEVICE
   if (g_logFileFd) {
     close(g_logFileFd);
     PRINT_LOG("SigHandler: closed logfile\n");
   }
+#endif
   pthread_mutex_destroy(&g_mutex);
 #ifndef USE_AESD_CHAR_DEVICE
   unlink(LOG_FILE);
@@ -194,10 +197,17 @@ void *sendAndReceiveThread(void *thread_param) {
   rc = pthread_mutex_lock(pArgs->mutex);
   checkerr(rc != 0, " locking mutex threadId=%d, code=%d", pArgs->threadId, rc);
   // lock success
+#ifdef USE_AESD_CHAR_DEVICE
+  pArgs->logFileFd = open(LOG_FILE, O_RDWR, 0644);
+  checkerr(pArgs->logFileFd < 0, "Error opening the file \n");
+  PRINT_LOG("Thread ID %d File opened now fd=%d\n", pArgs->threadId,
+            pArgs->logFileFd);
+#else
   // setup
   PRINT_LOG("Thread ID %d  set file location to end for writing \n",
             pArgs->threadId);
   lseek(pArgs->logFileFd, 0, SEEK_END);
+#endif
 
   // recv
   PRINT_LOG("Thread ID %d starting to receive\n", pArgs->threadId);
@@ -211,9 +221,11 @@ void *sendAndReceiveThread(void *thread_param) {
       break;
   }
 
+#ifndef USE_AESD_CHAR_DEVICE
   PRINT_LOG("Thread ID %d  reset file location for reading \n",
             pArgs->threadId);
   lseek(pArgs->logFileFd, 0, SEEK_SET);
+#endif
 
   char readBuf[1024];
   ssize_t readLen;
@@ -232,6 +244,12 @@ void *sendAndReceiveThread(void *thread_param) {
     checkerr(rc < 0, " sending data to client");
   }
   // cleanup
+#ifdef USE_AESD_CHAR_DEVICE
+  close(pArgs->logFileFd);
+  PRINT_LOG("Thread ID %d closed file now fd=%d\n", pArgs->threadId,
+            pArgs->logFileFd);
+  pArgs->logFileFd = -1;
+#endif
   // Unlock
   rc = pthread_mutex_unlock(pArgs->mutex);
   checkerr(rc != 0, " unlocking mutex");
@@ -357,10 +375,10 @@ int main(int argc, char **argv) {
   // open file for use by threads
 #ifndef USE_AESD_CHAR_DEVICE
   unlink(LOG_FILE);
-#endif
   g_logFileFd = open(LOG_FILE, O_CREAT | O_APPEND | O_SYNC | O_RDWR, 0644);
   checkerr(g_logFileFd < 0, "Error opening the file \n");
   PRINT_LOG("Main: File opened now fd=%d\n", g_logFileFd);
+#endif
 
   // create linked list for receiver threads
   SLIST_INIT(&g_head);
