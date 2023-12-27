@@ -15,7 +15,14 @@
 #include <time.h>
 #include <unistd.h>
 
+#define USE_AESD_CHAR_DEVICE
+
+#ifdef USE_AESD_CHAR_DEVICE
+#define LOG_FILE "/dev/aesdchar"
+#else
 #define LOG_FILE "/var/tmp/aesdsocketdata"
+#endif
+
 #define NAME_LEN 50
 #define SERVICE_LEN 50
 #define BUF_SIZE 1024
@@ -23,8 +30,8 @@
 
 #define ERROR_LOG(msg, errnum, ...)                                            \
   printf("ERROR %d:%s: " msg "\n", errnum, strerror(errnum), ##__VA_ARGS__)
-#if 0
-//enable debug prints
+#if 1
+// enable debug prints
 #define PRINT_LOG(msg, ...) printf("%s: " msg, __func__, ##__VA_ARGS__)
 #else
 // disable debug prints
@@ -45,8 +52,12 @@ static int g_clientSocketFd = -1;
 struct addrinfo g_hints;
 struct addrinfo *g_servInfo = NULL;
 static bool g_runAsDaemon = false;
+
+#ifndef USE_AESD_CHAR_DEVICE
 static timer_t g_timerid;
 static bool g_timerCreated = false;
+#endif
+
 static int g_threadCount = 0;
 static int g_threadId = 0;
 static pthread_mutex_t g_mutex;
@@ -104,10 +115,12 @@ void sigHandlerFunction(int signum) {
   unlink(LOG_FILE);
   PRINT_LOG("SigHandler: Deleted the file\n");
   pthread_mutex_destroy(&g_mutex);
+#ifndef USE_AESD_CHAR_DEVICE
   if (g_timerCreated) {
     timer_delete(g_timerid);
     PRINT_LOG("SigHandler: timer deleted\n");
   }
+#endif
   if (g_serverSocketFd) {
     close(g_serverSocketFd);
     PRINT_LOG("SigHandler: server socket closed\n");
@@ -120,6 +133,7 @@ void sigHandlerFunction(int signum) {
   exit(EXIT_FAILURE);
 }
 
+#ifndef USE_AESD_CHAR_DEVICE
 static void timerHandlerFunction(int signum) {
   time_t t;
   struct tm *tmp;
@@ -168,6 +182,7 @@ static void timerHandlerFunction(int signum) {
 static void timerHandlerThreadFunction(union sigval sigev_value) {
   return timerHandlerFunction(34);
 }
+#endif
 
 void *sendAndReceiveThread(void *thread_param) {
   struct thread_data *pArgs = (struct thread_data *)thread_param;
@@ -289,6 +304,11 @@ int main(int argc, char **argv) {
            "Error registering SIGINT sigaction");
 
   // register timer thread for SIGUSR1
+
+#ifdef USE_AESD_CHAR_DEVICE
+  PRINT_LOG(
+      "Main: Skipping timestamp handlind as aesd_char_device is being used");
+#else
   PRINT_LOG("Main: Registering handlers for SIGUSR1\n");
   struct sigaction timeract = {0};
   timeract.sa_handler = timerHandlerFunction;
@@ -296,6 +316,7 @@ int main(int argc, char **argv) {
   timeract.sa_flags = SA_SIGINFO;
   checkerr(sigaction(TIMERSIG, &timeract, NULL) == -1,
            "Error registering timer sigaction");
+#endif
 
   // Setup socket
   memset(&g_hints, 0, sizeof(g_hints));
@@ -314,7 +335,7 @@ int main(int argc, char **argv) {
   // setup socket reuse option
   const int enable = 1;
   checkerr(setsockopt(g_serverSocketFd, SOL_SOCKET, SO_REUSEADDR, &enable,
-                      sizeof(int)) !=  0,
+                      sizeof(int)) != 0,
            "Error setsockopt(SO_REUSEADDR) failed");
 
   // Techinically we need loop thorugh the linked list, but we expect only one
@@ -329,7 +350,7 @@ int main(int argc, char **argv) {
   }
 
   // listen
-  checkerr(listen(g_serverSocketFd, 1)!=0, "Error listening to socket");
+  checkerr(listen(g_serverSocketFd, 1) != 0, "Error listening to socket");
 
   // Setup for thread usage
 
@@ -351,6 +372,9 @@ int main(int argc, char **argv) {
   g_mutexInitialized = true;
   PRINT_LOG("Main: Mutex intialized now\n");
 
+#ifdef USE_AESD_CHAR_DEVICE
+  PRINT_LOG("Main: Timer not used when aesd_char_dev is used\n");
+#else
   // Setup Timer
   struct sigevent sev;
   struct itimerspec its;
@@ -374,6 +398,7 @@ int main(int argc, char **argv) {
   checkerr(timer_settime(g_timerid, 0, &its, NULL) != 0,
            "Error starting the timer");
   PRINT_LOG("Main: Timer started now\n");
+#endif
 
   // accept connections and start threads.
   for (;;) {
