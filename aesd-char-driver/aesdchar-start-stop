@@ -1,0 +1,20 @@
+#! /bin/sh
+cd /etc/assign8
+
+case "$1" in
+    start)
+    echo "Loading assignment8 modules.."
+    echo "module load for aesdchar"
+    /bin/sh ./aesdchar_load
+    ;;
+    stop)
+    echo "Unloading assignment8 modules.."
+    echo "module unload for aesdchar"
+    /bin/sh ./aesdchar_unload
+    ;;
+    *)
+    echo "Usage: $0 {start|stop}"
+    exit 1
+esac
+
+exit 0
