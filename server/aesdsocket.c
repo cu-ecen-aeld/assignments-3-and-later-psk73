@@ -112,10 +112,10 @@ void sigHandlerFunction(int signum) {
     close(g_logFileFd);
     PRINT_LOG("SigHandler: closed logfile\n");
   }
-  unlink(LOG_FILE);
-  PRINT_LOG("SigHandler: Deleted the file\n");
   pthread_mutex_destroy(&g_mutex);
 #ifndef USE_AESD_CHAR_DEVICE
+  unlink(LOG_FILE);
+  PRINT_LOG("SigHandler: Deleted the file\n");
   if (g_timerCreated) {
     timer_delete(g_timerid);
     PRINT_LOG("SigHandler: timer deleted\n");
@@ -355,7 +355,9 @@ int main(int argc, char **argv) {
   // Setup for thread usage
 
   // open file for use by threads
+#ifndef USE_AESD_CHAR_DEVICE
   unlink(LOG_FILE);
+#endif
   g_logFileFd = open(LOG_FILE, O_CREAT | O_APPEND | O_SYNC | O_RDWR, 0644);
   checkerr(g_logFileFd < 0, "Error opening the file \n");
   PRINT_LOG("Main: File opened now fd=%d\n", g_logFileFd);
