@@ -63,7 +63,9 @@ extern struct aesd_buffer_entry *aesd_circular_buffer_add_entry(struct aesd_circ
 
 extern void aesd_circular_buffer_init(struct aesd_circular_buffer *buffer);
 
+#ifdef __KERNEL__
 extern void aesd_circular_buffer_destroy(struct aesd_circular_buffer *buffer);
+#endif
 
 /**
  * Create a for loop to iterate over each member of the circular buffer.

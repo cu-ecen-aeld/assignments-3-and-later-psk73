@@ -159,6 +159,7 @@ void aesd_circular_buffer_init(struct aesd_circular_buffer *buffer) {
   memset(buffer, 0, sizeof(struct aesd_circular_buffer));
 }
 
+#ifdef __KERNEL__
 /**
  * Initializes the circular buffer described by @param buffer to an empty struct
  */
@@ -170,3 +171,4 @@ void aesd_circular_buffer_destroy(struct aesd_circular_buffer *buffer) {
       kfree(entry->buffptr);
   }
 }
+#endif
