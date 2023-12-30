@@ -11,11 +11,13 @@
  *
  */
 
+#include "aesd_ioctl.h"
 #include "aesdchar.h"
 #include <asm/uaccess.h>
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
 #include <linux/init.h>
+#include <linux/ioctl.h>
 #include <linux/module.h>
 #include <linux/printk.h>
 #include <linux/slab.h>
@@ -53,46 +55,41 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
   struct aesd_buffer_entry *readEntryPtr;
   size_t offWithinEntry;
   devp = (struct aesd_dev *)filp->private_data;
-  PDEBUG(
-      "Read: %zu bytes with offset %lld filp->fpos=%lld devp->readoffset=%ld",
-      count, *f_pos, filp->f_pos, devp->readOffset);
+  PDEBUG("Read: %zu bytes with offset %lld filp->fpos=%lld "
+         "devp->nextReadPosition=%ld",
+         count, *f_pos, filp->f_pos, devp->nextReadPosition);
+  devp->nextReadPosition = *f_pos;
   PDEBUG("Read: mutex locking");
   mutex_lock(&devp->aesd_dev_buf_lock);
   PDEBUG("Read: obtained read mutex");
 
-#if 0
-  if (devp->numEntriesInBuffer <= 0) {
-    PDEBUG("Read: Buffer empty, return 0");
-    devp->numEntriesInBuffer = 0;
-    devp->readOffset = 0;
-    devp->writeOffset = 0;
-    retval = 0;
-    goto ret_done;
-  }
-#endif
-
   readEntryPtr = aesd_circular_buffer_find_entry_offset_for_fpos(
-      &devp->aesd_dev_buffer, (size_t)(devp->readOffset), &offWithinEntry);
+      &devp->aesd_dev_buffer, (size_t)(devp->nextReadPosition),
+      &offWithinEntry);
   if (readEntryPtr == NULL) {
     PDEBUG("Read: not able to read from circular buffer returning 0");
-    devp->readOffset = 0;
-    devp->writeOffset = 0;
+    devp->nextReadPosition = 0;
     retval = 0;
     goto ret_done;
   } else {
     size_t retsize = readEntryPtr->size - offWithinEntry;
+    // Return only atmost count bytes..
+    if (retsize > count) {
+      retsize = count;
+    }
     PDEBUG("Read: readEntry size = %ld offwithinentry = %ld retsize = %ld",
            readEntryPtr->size, offWithinEntry, retsize);
-    PDEBUG("Read: returning %s", (readEntryPtr->buffptr + offWithinEntry));
+    PDEBUG("Read: returning first <%ld> of <%s>", retsize,
+           (readEntryPtr->buffptr + offWithinEntry));
     if (copy_to_user(buf, readEntryPtr->buffptr + offWithinEntry, retsize)) {
       retval = -EFAULT;
       PDEBUG("Read: error copying to user");
       goto ret_done;
     }
     PDEBUG("Read: Copy to user done");
-    devp->readOffset += retsize;
-    filp->f_pos = devp->readOffset;
-    PDEBUG("Read: updated fpos to %ld", devp->readOffset);
+    devp->nextReadPosition += retsize;
+    *f_pos = *f_pos + retsize;
+    PDEBUG("Read: updated fpos to %ld", devp->nextReadPosition);
     retval = retsize;
   }
 ret_done:
@@ -115,8 +112,8 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
   PDEBUG("Write: mutex locking.");
   mutex_lock(&devp->aesd_dev_buf_lock);
   PDEBUG("Write: obtained write mutex ");
-  PDEBUG("Write: working entry buffer=%s",devp->aesd_working_entry.buffptr);
-  PDEBUG("Write: working entry size=%ld",devp->aesd_working_entry.size);
+  PDEBUG("Write: working entry buffer=%s", devp->aesd_working_entry.buffptr);
+  PDEBUG("Write: working entry size=%ld", devp->aesd_working_entry.size);
 
   memSzReqd = devp->aesd_working_entry.size + count;
   PDEBUG("Write: allocating %ld bytes of kernel memory", memSzReqd);
@@ -163,11 +160,10 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     if (retPtr != NULL) {
       PDEBUG("Write: buffer entry was overwritten. releasing memory");
       PDEBUG("Write: lost %s", retPtr->buffptr);
-      devp->writeOffset -= retPtr->size;
-      // devp->readOffset -= retPtr->size;
       kfree(retPtr->buffptr);
       retPtr->buffptr = NULL;
     }
+
     // reset working entry as we stored this in circular buffer now
     devp->aesd_working_entry.size = 0;
     devp->aesd_working_entry.buffptr = NULL;
@@ -176,14 +172,119 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
   // Not adding to circular buffer as no new line, stored only in the working
   // entry
   //}
-  devp->writeOffset += retval;
-  filp->f_pos = devp->writeOffset;
-  PDEBUG("Write: updated fpos to %ld", devp->writeOffset);
+  *f_pos = *f_pos + retval;
 
 ret_done:
   PDEBUG("Write: unlocking mutex..");
   mutex_unlock(&devp->aesd_dev_buf_lock);
   PDEBUG("Write: returning %ld", retval);
+  return retval;
+}
+
+/**
+ * Adjust the file offset of @param filp based on command and offset
+ * @param write_cmd zero referenced command to locacte
+ * @param write_cmd_offset zero referenced offset within  commang
+ * @return 0 if success,
+ * -ERESTARTSTYS if mutex not obtained
+ * -EINVAL on error inputs
+ */
+static long aesd_adjust_file_offset(struct file *filp, unsigned int writecmd,
+                                    unsigned int writecmd_offset) {
+  uint8_t index;
+  size_t pos = 0;
+  struct aesd_buffer_entry *entryPtr;
+  bool found = false;
+  struct aesd_dev *devp;
+  int retval = -EINVAL;
+
+  if (writecmd >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) {
+    PDEBUG("Adjust: Incorrect write command");
+    goto r_done;
+  }
+
+  devp = (struct aesd_dev *)filp->private_data;
+
+  PDEBUG("Adjust: mutex locking.");
+  mutex_lock(&devp->aesd_dev_buf_lock);
+
+  if (!devp->aesd_dev_buffer.full &&
+      (devp->aesd_dev_buffer.in_offs == devp->aesd_dev_buffer.out_offs)) {
+    PDEBUG("Adjust: Incorrect write command, buffer is empty");
+    goto r_done;
+  }
+
+  AESD_CIRCULAR_BUFFER_FOREACH(entryPtr, &aesd_device.aesd_dev_buffer, index) {
+    if (entryPtr->buffptr) {
+      if (index == writecmd) {
+        if (writecmd_offset > entryPtr->size) {
+          PDEBUG("Adjust: Error incorrect write cmd offset %d",
+                 writecmd_offset);
+          goto r_done;
+        }
+        pos += writecmd_offset;
+        found = true;
+        PDEBUG("Found writecmd=%d writeoffset=%d pos = %ld", writecmd,
+               writecmd_offset, pos);
+        retval = 0;
+        break;
+      } else {
+        pos += entryPtr->size;
+      }
+    }
+  }
+
+  if (!found) {
+    PDEBUG("Adjust: Incorrect write command");
+    goto r_done;
+  }
+  PDEBUG("Setting filepos to %ld", pos);
+  filp->f_pos = pos;
+
+r_done:
+  PDEBUG("Adjust: mutex unlocking.");
+  mutex_unlock(&devp->aesd_dev_buf_lock);
+  return retval;
+}
+
+static loff_t aesd_llseek(struct file *filp, loff_t off, int whence) {
+  struct aesd_dev *devp;
+  loff_t retval;
+  devp = (struct aesd_dev *)filp->private_data;
+
+  PDEBUG("llseek: called with off=%lld whence=%d buf_len=%ld", off, whence,
+         devp->aesd_dev_buffer.buf_len);
+  PDEBUG("llseek: mutex locking.");
+  mutex_lock(&devp->aesd_dev_buf_lock);
+
+  retval = fixed_size_llseek(filp, off, whence, devp->aesd_dev_buffer.buf_len);
+
+  PDEBUG("llseek: returning fpos as %lld", retval);
+
+  PDEBUG("llseek: mutex unlocking.");
+  mutex_unlock(&devp->aesd_dev_buf_lock);
+
+  return retval;
+}
+
+static long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
+  struct aesd_seekto seekto;
+  long retval = -EINVAL;
+
+  PDEBUG("ioctl: cmd is seekto? %d", cmd == AESDCHAR_IOCSEEKTO);
+  switch (cmd) {
+  case AESDCHAR_IOCSEEKTO:
+    if (copy_from_user(&seekto, (const void *)arg, sizeof(seekto)) != 0) {
+      PDEBUG("ioctl: error copying from user");
+      retval = -ERESTARTSYS;
+      return retval;
+    }
+    PDEBUG("ioctl: adjusting the offset writecmd=%d writecmdoff=%d",
+           seekto.write_cmd, seekto.write_cmd_offset);
+    retval = aesd_adjust_file_offset(filp, seekto.write_cmd,
+                                     seekto.write_cmd_offset);
+    break;
+  }
   return retval;
 }
 
@@ -193,6 +294,8 @@ struct file_operations aesd_fops = {
     .write = aesd_write,
     .open = aesd_open,
     .release = aesd_release,
+    .llseek = aesd_llseek,
+    .unlocked_ioctl = aesd_ioctl,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev) {
@@ -224,6 +327,7 @@ int aesd_init_module(void) {
   aesd_circular_buffer_init(&aesd_device.aesd_dev_buffer);
   aesd_device.aesd_working_entry.size = 0;
   aesd_device.aesd_working_entry.buffptr = NULL;
+  aesd_device.nextReadPosition = 0;
   mutex_init(&aesd_device.aesd_dev_buf_lock);
 
   result = aesd_setup_cdev(&aesd_device);

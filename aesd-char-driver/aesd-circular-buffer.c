@@ -8,7 +8,7 @@
  *
  */
 
-//#define DEBUGPRINT
+// #define DEBUGPRINT
 
 #ifdef __KERNEL__
 
@@ -87,7 +87,8 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(
       // calculate off set to return;
       *entry_offset_byte_rtn = char_offset - prevRunningOffset;
       PRINT("\t found returning offset %d\n", (int)(*entry_offset_byte_rtn));
-      PRINT("\t returning buf %s \n\treturning size %ld",entryptr->buffptr,entryptr->size);
+      PRINT("\t returning buf %s \n\treturning size %ld", entryptr->buffptr,
+            entryptr->size);
       return entryptr;
     }
     index = (index + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
@@ -125,6 +126,7 @@ aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer,
   // update offsets
   buffer->entry[buffer->in_offs].buffptr = add_entry->buffptr;
   buffer->entry[buffer->in_offs].size = add_entry->size;
+  buffer->buf_len += add_entry->size;
 
   PRINT("new buf[%d]=%s size=%ld\n", buffer->in_offs,
         buffer->entry[buffer->in_offs].buffptr,
@@ -137,6 +139,7 @@ aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer,
     retPtr = &buffer->overflow_entry;
     PRINT("Buffer overflow, lost previous entry %s at %d\n", retPtr->buffptr,
           buffer->out_offs);
+    buffer->buf_len -= retPtr->size;
     buffer->out_offs = buffer->in_offs;
   } else {
     retPtr = NULL;

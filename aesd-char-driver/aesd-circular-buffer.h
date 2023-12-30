@@ -41,6 +41,8 @@ struct aesd_circular_buffer
      */
     struct aesd_buffer_entry  entry[AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED];
     struct aesd_buffer_entry  overflow_entry;
+
+    size_t buf_len;
     /**
      * The current location in the entry structure where the next write should
      * be stored.
