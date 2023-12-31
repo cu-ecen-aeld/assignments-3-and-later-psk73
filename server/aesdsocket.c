@@ -15,6 +15,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../aesd-char-driver/aesd_ioctl.h"
+
 #define USE_AESD_CHAR_DEVICE
 
 #ifdef USE_AESD_CHAR_DEVICE
@@ -210,30 +212,50 @@ void *sendAndReceiveThread(void *thread_param) {
 #endif
 
   // recv
+  struct aesd_seekto seekto;
+  char iocbuf[50];
+  bool isIoctl = false;
+
   PRINT_LOG("Thread ID %d starting to receive\n", pArgs->threadId);
   while ((rcvd = recv(pArgs->clientSocketFd, (void *)buf, sizeof(buf), 0)) >
          0) {
-    PRINT_LOG("\tnum rcvd = %d \n", (int)rcvd);
-    rc = write(pArgs->logFileFd, buf, rcvd);
-    checkerr(rc != rcvd, " writing to file");
-    // finished with recieving if end of packet
-    if (buf[rcvd - 1] == '\n')
+    PRINT_LOG("\tnum rcvd = %d %.23s\n", (int)rcvd, buf);
+    // printf("psk-debug: %.19s\n",buf);
+
+    if (strncmp(buf, "AESDCHAR_IOCSEEKTO:", 19) == 0) {
+      PRINT_LOG("Thread ID %d received IOCTL request\n", pArgs->threadId);
+      sscanf(buf, "%[^:]:%d,%d", iocbuf, &seekto.write_cmd,
+             &seekto.write_cmd_offset);
+      isIoctl = true;
+      PRINT_LOG("\tcalling ioctl for %s , cmd = %d off =%d\n", iocbuf,
+                seekto.write_cmd, seekto.write_cmd_offset);
+      rc = ioctl(pArgs->logFileFd, AESDCHAR_IOCSEEKTO, &seekto);
+      checkerr(rc < 0, "error with ioctl");
+    } else {
+      PRINT_LOG("Thread ID %d writing to log file now %d count\n",
+                pArgs->threadId, rcvd);
+      rc = write(pArgs->logFileFd, buf, rcvd);
+      checkerr(rc != rcvd, " writing to file");
+      // finished with recieving if end of packet
+    }
+    if (buf[rcvd - 1] == '\n') {
       break;
+    }
   }
 
-#ifndef USE_AESD_CHAR_DEVICE
-  PRINT_LOG("Thread ID %d  reset file location for reading \n",
-            pArgs->threadId);
-  lseek(pArgs->logFileFd, 0, SEEK_SET);
-#endif
+  if (!isIoctl) {
+    PRINT_LOG("Thread ID %d  reset file location for reading \n",
+              pArgs->threadId);
+    lseek(pArgs->logFileFd, 0, SEEK_SET);
+  }
 
   char readBuf[1024];
   ssize_t readLen;
 
   // send
-  PRINT_LOG("Thread ID %d  sending to client\n", pArgs->threadId);
+  PRINT_LOG("Thread ID %d  sending back to client\n", pArgs->threadId);
   while ((readLen = read(pArgs->logFileFd, readBuf, 1024)) > 0) {
-    PRINT_LOG("\tnum read = %d \n", (int)readLen);
+    PRINT_LOG("\tnum read from log = %d \n", (int)readLen);
     /*
     int i;
     PRINT_LOG("--\n")
@@ -243,6 +265,7 @@ void *sendAndReceiveThread(void *thread_param) {
     rc = send(pArgs->clientSocketFd, readBuf, readLen, 0);
     checkerr(rc < 0, " sending data to client");
   }
+  PRINT_LOG("\t final num read = %d \n", (int)readLen);
   // cleanup
 #ifdef USE_AESD_CHAR_DEVICE
   close(pArgs->logFileFd);
